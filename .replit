@@ -1,0 +1,10 @@
+modules = ["python-3.12"]
+run = "python3 app.py"
+
+[deployment]
+run = ["python3", "app.py"]
+deploymentTarget = "autoscale"
+
+[[ports]]
+localPort = 8080
+externalPort = 80

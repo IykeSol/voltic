@@ -42,7 +42,12 @@ else:
     def _voltic_gpu_worker(ping: str = "active") -> str:
         return f"Voltic engine online: {ping}"
 
-import gradio as gr
+try:
+    import gradio as gr
+    HAS_GRADIO = True
+except Exception:
+    HAS_GRADIO = False
+
 from app.config import settings
 from app.database.db import init_db, seed_if_empty
 from app.main import app as voltic_app
@@ -51,20 +56,24 @@ from app.main import app as voltic_app
 init_db()
 seed_if_empty()
 
-# Create Gradio demo with the @spaces.GPU dependency hooked to startup
-with gr.Blocks(title="Voltic — Prepaid Meter Analyzer") as demo:
-    _hidden_in = gr.Textbox(value="startup", visible=False)
-    _hidden_out = gr.Textbox(visible=False)
-    demo.load(fn=_voltic_gpu_worker, inputs=_hidden_in, outputs=_hidden_out)
+if HAS_GRADIO:
+    # Create Gradio demo with the @spaces.GPU dependency hooked to startup
+    with gr.Blocks(title="Voltic — Prepaid Meter Analyzer") as demo:
+        _hidden_in = gr.Textbox(value="startup", visible=False)
+        _hidden_out = gr.Textbox(visible=False)
+        demo.load(fn=_voltic_gpu_worker, inputs=_hidden_in, outputs=_hidden_out)
 
-# Build Gradio's native application
-app = gr.routes.App.create_app(demo)
+    # Build Gradio's native application
+    app = gr.routes.App.create_app(demo)
 
-# Prepend all Voltic routes & static mounts so Voltic serves directly at root (/, /dashboard, /static, etc.)
-for r in voltic_app.routes:
-    app.routes.insert(0, r)
+    # Prepend all Voltic routes & static mounts so Voltic serves directly at root (/, /dashboard, /static, etc.)
+    for r in voltic_app.routes:
+        app.routes.insert(0, r)
+else:
+    app = voltic_app
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 7860))
+    port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port, reload=False)
+
