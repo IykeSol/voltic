@@ -1,0 +1,26 @@
+# Python
+venv/
+env/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Environment / secrets
+.env
+
+# Generated model artifacts (rebuilt by scripts/train_model.py)
+trained_models/
+
+# SQLite databases (rebuilt on first run)
+*.db
+app/database/*.db
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log

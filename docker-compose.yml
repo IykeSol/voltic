@@ -1,0 +1,12 @@
+services:
+  app:
+    build: .
+    container_name: voltic-prepaid-analyzer
+    ports:
+      - "7860:7860"
+    env_file:
+      - .env
+    environment:
+      # Falls back to the built-in analysis if no key is provided.
+      - GEMINI_MODEL=gemini-2.0-flash-lite
+    restart: unless-stopped
