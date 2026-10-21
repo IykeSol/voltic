@@ -58,7 +58,7 @@ custom_css = """
 footer { display: none !important; }
 """
 
-with gr.Blocks(title="Voltic — Prepaid Meter Analyzer", css=custom_css, fill_width=True) as demo:
+with gr.Blocks(title="Voltic — Prepaid Meter Analyzer", fill_width=True) as demo:
     # Hidden components that trigger the @spaces.GPU worker during app startup
     _hidden_in = gr.Textbox(value="startup", visible=False)
     _hidden_out = gr.Textbox(visible=False)
@@ -67,14 +67,12 @@ with gr.Blocks(title="Voltic — Prepaid Meter Analyzer", css=custom_css, fill_w
     # Embed the full interactive Voltic Dashboard
     gr.HTML(
         """
-        <iframe src="/dashboard" style="width: 100%; height: 100vh; border: none; margin: 0; padding: 0;"></iframe>
+        <iframe src="/dashboard" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; border: none; margin: 0; padding: 0; z-index: 9999;"></iframe>
         """
     )
 
-# Attach all Voltic FastAPI routes onto demo.app
-for route in voltic_app.routes:
-    if route.path not in ["/"]:
-        demo.app.routes.append(route)
+# Attach all Voltic FastAPI routes onto demo.app cleanly
+demo.app.include_router(voltic_app.router)
 
 # Mount static files directly on demo.app
 demo.app.mount("/static", StaticFiles(directory=settings.FRONTEND_DIR), name="static")
@@ -85,3 +83,4 @@ if __name__ == "__main__":
         server_port=7860,
         ssr_mode=False,
     )
+
