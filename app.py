@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 # ZeroGPU hook to satisfy Hugging Face ZeroGPU runtime requirement
 try:
-    import spaces
+    import spaces  # type: ignore
     gpu_decorator = spaces.GPU
 except Exception:
     def gpu_decorator(fn):
