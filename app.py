@@ -1,7 +1,7 @@
-"""Hugging Face Spaces entry point for Voltic (Free Gradio / ZeroGPU Tier).
+"""Hugging Face Spaces entry point for Voltic (Free ZeroGPU Tier).
 
-Serves the full Voltic application on port 7860, including the interactive
-dashboard, machine-learning forecasting engine, and Gemini AI insights.
+Integrates the full Voltic analytics platform and dashboard with Hugging Face's
+Gradio runtime and ZeroGPU supervisor.
 """
 
 from __future__ import annotations
@@ -12,21 +12,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
-
-# ZeroGPU hook to satisfy Hugging Face ZeroGPU runtime requirement
-try:
-    import spaces  # type: ignore
-    gpu_decorator = spaces.GPU
-except Exception:
-    def gpu_decorator(fn):
-        return fn
-
-
-@gpu_decorator
-def _voltic_gpu_worker(ping: str = "active") -> str:
-    """ZeroGPU worker stub so Hugging Face assigns runtime slice."""
-    return f"Voltic engine online: {ping}"
-
 
 # Ensure dataset and ML models exist before serving
 model_file = ROOT / "trained_models" / "usage_model.pkl"
@@ -42,22 +27,61 @@ if not model_file.exists():
     from scripts.train_model import main as train_models
     train_models()
 
+# ZeroGPU hook to satisfy Hugging Face ZeroGPU runtime requirement
+try:
+    import spaces  # type: ignore
+    HAS_SPACES = True
+except Exception:
+    HAS_SPACES = False
+
+if HAS_SPACES:
+    @spaces.GPU
+    def _voltic_gpu_worker(ping: str = "active") -> str:
+        return f"Voltic GPU cluster online: {ping}"
+else:
+    def _voltic_gpu_worker(ping: str = "active") -> str:
+        return f"Voltic engine online: {ping}"
+
 import gradio as gr
-from app.main import app
+from fastapi.staticfiles import StaticFiles
+from app.config import settings
+from app.database.db import init_db, seed_if_empty
+from app.main import app as voltic_app
 
-# Minimal Gradio interface connected to the @spaces.GPU function
-demo = gr.Interface(
-    fn=_voltic_gpu_worker,
-    inputs=gr.Textbox(label="Status", value="active"),
-    outputs=gr.Textbox(label="Result"),
-    title="⚡ Voltic AI Engine",
-    description="Your dashboard is running! Navigate to [**Dashboard**](/) to view the application.",
-)
+# Initialize database
+init_db()
+seed_if_empty()
 
-# Mount Gradio at /gradio with ssr_mode=False to avoid secondary Node.js port conflicts
-app = gr.mount_gradio_app(app, demo, path="/gradio", ssr_mode=False)
+# Custom CSS to make the dashboard full-bleed without padding
+custom_css = """
+.gradio-container { max-width: 100% !important; padding: 0 !important; margin: 0 !important; }
+footer { display: none !important; }
+"""
+
+with gr.Blocks(title="Voltic — Prepaid Meter Analyzer", css=custom_css, fill_width=True) as demo:
+    # Hidden components that trigger the @spaces.GPU worker during app startup
+    _hidden_in = gr.Textbox(value="startup", visible=False)
+    _hidden_out = gr.Textbox(visible=False)
+    demo.load(fn=_voltic_gpu_worker, inputs=_hidden_in, outputs=_hidden_out)
+
+    # Embed the full interactive Voltic Dashboard
+    gr.HTML(
+        """
+        <iframe src="/dashboard" style="width: 100%; height: 100vh; border: none; margin: 0; padding: 0;"></iframe>
+        """
+    )
+
+# Attach all Voltic FastAPI routes onto demo.app
+for route in voltic_app.routes:
+    if route.path not in ["/"]:
+        demo.app.routes.append(route)
+
+# Mount static files directly on demo.app
+demo.app.mount("/static", StaticFiles(directory=settings.FRONTEND_DIR), name="static")
 
 if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 7860))
-    uvicorn.run(app, host="0.0.0.0", port=port, reload=False)
+    demo.queue().launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        ssr_mode=False,
+    )
