@@ -11,8 +11,8 @@ __pycache__/
 # Environment / secrets
 .env
 
-# Generated model artifacts (rebuilt by scripts/train_model.py)
-trained_models/
+# Generated model artifacts (included for instant cloud startup)
+# trained_models/
 
 # SQLite databases (rebuilt on first run)
 *.db

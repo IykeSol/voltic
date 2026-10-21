@@ -1,0 +1,37 @@
+{
+  "regression": {
+    "mae": 0.1002,
+    "rmse": 0.1976,
+    "r2": 0.7407,
+    "train_rows": 40320,
+    "test_rows": 10080
+  },
+  "anomaly": {
+    "precision": 0.365,
+    "recall": 0.639,
+    "flagged": 252,
+    "injected": 144
+  },
+  "regression_features": [
+    "hour",
+    "temperature",
+    "humidity",
+    "household_size",
+    "power_outage",
+    "day_of_week",
+    "ac_usage_hours",
+    "fridge_usage",
+    "tv_usage_hours",
+    "fan_usage_hours",
+    "washing_machine_usage",
+    "day_type",
+    "income_level"
+  ],
+  "anomaly_features": [
+    "units_z",
+    "units_consumed_kwh",
+    "hour",
+    "ac_usage_hours",
+    "fan_usage_hours"
+  ]
+}
