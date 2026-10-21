@@ -43,7 +43,6 @@ else:
         return f"Voltic engine online: {ping}"
 
 import gradio as gr
-from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.database.db import init_db, seed_if_empty
 from app.main import app as voltic_app
@@ -52,35 +51,20 @@ from app.main import app as voltic_app
 init_db()
 seed_if_empty()
 
-# Custom CSS to make the dashboard full-bleed without padding
-custom_css = """
-.gradio-container { max-width: 100% !important; padding: 0 !important; margin: 0 !important; }
-footer { display: none !important; }
-"""
-
-with gr.Blocks(title="Voltic — Prepaid Meter Analyzer", fill_width=True) as demo:
-    # Hidden components that trigger the @spaces.GPU worker during app startup
+# Create Gradio demo with the @spaces.GPU dependency hooked to startup
+with gr.Blocks(title="Voltic — Prepaid Meter Analyzer") as demo:
     _hidden_in = gr.Textbox(value="startup", visible=False)
     _hidden_out = gr.Textbox(visible=False)
     demo.load(fn=_voltic_gpu_worker, inputs=_hidden_in, outputs=_hidden_out)
 
-    # Embed the full interactive Voltic Dashboard
-    gr.HTML(
-        """
-        <iframe src="/dashboard" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; border: none; margin: 0; padding: 0; z-index: 9999;"></iframe>
-        """
-    )
+# Build Gradio's native application
+app = gr.routes.App.create_app(demo)
 
-# Attach all Voltic FastAPI routes onto demo.app cleanly
-demo.app.include_router(voltic_app.router)
-
-# Mount static files directly on demo.app
-demo.app.mount("/static", StaticFiles(directory=settings.FRONTEND_DIR), name="static")
+# Prepend all Voltic routes & static mounts so Voltic serves directly at root (/, /dashboard, /static, etc.)
+for r in voltic_app.routes:
+    app.routes.insert(0, r)
 
 if __name__ == "__main__":
-    demo.queue().launch(
-        server_name="0.0.0.0",
-        server_port=7860,
-        ssr_mode=False,
-    )
-
+    import uvicorn
+    port = int(os.environ.get("PORT", 7860))
+    uvicorn.run(app, host="0.0.0.0", port=port, reload=False)
