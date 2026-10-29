@@ -70,10 +70,130 @@ DEMO_PROFILE = {
 }
 
 
+class DictRow:
+    """Provides sqlite3.Row-compatible dictionary and index access."""
+    __slots__ = ("_cols", "_vals", "_d")
+
+    def __init__(self, cols: list[str], vals: tuple):
+        self._cols = cols
+        self._vals = vals
+        self._d = dict(zip(cols, vals))
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._vals[key]
+        return self._d[key]
+
+    def get(self, key, default=None):
+        return self._d.get(key, default)
+
+    def keys(self):
+        return self._d.keys()
+
+    def values(self):
+        return self._d.values()
+
+    def items(self):
+        return self._d.items()
+
+    def __iter__(self):
+        return iter(self._d)
+
+    def __len__(self):
+        return len(self._d)
+
+    def __repr__(self):
+        return repr(self._d)
+
+
+class TursoCursorWrapper:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    @property
+    def lastrowid(self):
+        return getattr(self._cursor, "lastrowid", None)
+
+    @property
+    def description(self):
+        return getattr(self._cursor, "description", None)
+
+    def _wrap(self, row):
+        if row is None:
+            return None
+        if self._cursor.description:
+            cols = [col[0] for col in self._cursor.description]
+            return DictRow(cols, row)
+        return row
+
+    def fetchone(self):
+        return self._wrap(self._cursor.fetchone())
+
+    def fetchall(self):
+        desc = self._cursor.description
+        if not desc:
+            return self._cursor.fetchall()
+        cols = [col[0] for col in desc]
+        return [DictRow(cols, r) for r in self._cursor.fetchall()]
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+
+class TursoConnWrapper:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql: str, params: tuple | list = ()):
+        cur = self._conn.cursor()
+        if params:
+            cur.execute(sql, tuple(params))
+        else:
+            cur.execute(sql)
+        return TursoCursorWrapper(cur)
+
+    def executescript(self, script: str):
+        # Strip comments and split by semicolon
+        lines = []
+        for line in script.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("--"):
+                lines.append(line)
+        cleaned = "\n".join(lines)
+        for stmt in cleaned.split(";"):
+            s = stmt.strip()
+            if s:
+                self.execute(s)
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        if hasattr(self._conn, "close"):
+            self._conn.close()
+
+
 @contextmanager
-def get_conn() -> Iterator[sqlite3.Connection]:
-    conn = sqlite3.connect(settings.DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
+def get_conn():
+    conn = None
+    if settings.TURSO_DATABASE_URL and settings.TURSO_AUTH_TOKEN:
+        try:
+            import libsql  # type: ignore
+            raw_conn = libsql.connect(
+                database=settings.TURSO_DATABASE_URL,
+                auth_token=settings.TURSO_AUTH_TOKEN,
+            )
+            conn = TursoConnWrapper(raw_conn)
+        except Exception as e:
+            print(f"[db] Turso connection error, falling back to local SQLite: {e}")
+
+    if conn is None:
+        # Fallback: standard local SQLite
+        settings.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        raw_sqlite = sqlite3.connect(settings.DB_PATH, check_same_thread=False)
+        raw_sqlite.row_factory = sqlite3.Row
+        conn = raw_sqlite
+
     try:
         yield conn
         conn.commit()
@@ -148,8 +268,11 @@ def seed_if_empty() -> None:
             )
 
 
-def assign_meter_for_new_user() -> str:
+def assign_meter_for_new_user(conn=None) -> str:
     """Mint a fresh meter label for a new signup (no usage history attached)."""
-    with get_conn() as conn:
+    if conn is not None:
         n = conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+    else:
+        with get_conn() as c:
+            n = c.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
     return f"MTR-U{n + 1:04d}"

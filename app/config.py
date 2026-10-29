@@ -5,10 +5,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 ROOT_DIR = Path(__file__).resolve().parents[1]
-load_dotenv(ROOT_DIR / ".env")
+
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv(ROOT_DIR / ".env")
+except ImportError:
+    pass
 
 
 class Settings:
@@ -21,6 +24,10 @@ class Settings:
     MODEL_DIR = ROOT_DIR / "trained_models"
     DB_PATH = ROOT_DIR / "app" / "database" / "meter.db"
     FRONTEND_DIR = ROOT_DIR / "frontend"
+
+    # Turso / LibSQL (Persistent Cloud SQLite)
+    TURSO_DATABASE_URL = os.getenv("TURSO_DATABASE_URL", "")
+    TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
 
     # Auth / JWT
     JWT_SECRET = os.getenv("JWT_SECRET", "prepaid-meter-dev-secret-change-in-production")

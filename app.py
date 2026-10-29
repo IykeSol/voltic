@@ -43,7 +43,7 @@ else:
         return f"Voltic engine online: {ping}"
 
 try:
-    import gradio as gr
+    import gradio as gr  # type: ignore
     HAS_GRADIO = True
 except Exception:
     HAS_GRADIO = False
@@ -52,11 +52,11 @@ from app.config import settings
 from app.database.db import init_db, seed_if_empty
 from app.main import app as voltic_app
 
-# Initialize database
-init_db()
-seed_if_empty()
-
 if HAS_GRADIO:
+    # Initialize database explicitly when Gradio wraps routes (bypassing voltic_app lifespan)
+    init_db()
+    seed_if_empty()
+
     # Create Gradio demo with the @spaces.GPU dependency hooked to startup
     with gr.Blocks(title="Voltic — Prepaid Meter Analyzer") as demo:
         _hidden_in = gr.Textbox(value="startup", visible=False)

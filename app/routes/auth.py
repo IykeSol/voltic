@@ -29,16 +29,16 @@ def signup(req: SignupRequest):
         if exists:
             raise HTTPException(status_code=409, detail="An account with this email already exists")
 
-        meter_id = assign_meter_for_new_user()
-        cur = conn.execute(
+        meter_id = assign_meter_for_new_user(conn)
+        conn.execute(
             """INSERT INTO users (full_name, email, password_hash, meter_id, created_at)
                VALUES (?,?,?,?,?)""",
             (req.full_name.strip(), req.email, hash_password(req.password),
              meter_id, datetime.utcnow().isoformat()),
         )
         row = conn.execute(
-            "SELECT id, full_name, email, meter_id FROM users WHERE id = ?",
-            (cur.lastrowid,),
+            "SELECT id, full_name, email, meter_id FROM users WHERE email = ?",
+            (req.email,),
         ).fetchone()
     return _token_response(row)
 
