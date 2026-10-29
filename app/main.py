@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.ai import gemini_client
 from app.config import settings
-from app.database.db import init_db, seed_if_empty
+from app.database.db import init_db, is_turso_configured, seed_if_empty
 from app.routes import ai, auth, export, profile, usage
 
 
@@ -50,7 +50,12 @@ app.include_router(export.router)
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "project": settings.PROJECT_NAME, "version": settings.VERSION}
+    return {
+        "status": "ok",
+        "project": settings.PROJECT_NAME,
+        "version": settings.VERSION,
+        "database": "turso" if is_turso_configured() else "sqlite-local",
+    }
 
 
 # --- Frontend ------------------------------------------------------------- #

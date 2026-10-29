@@ -7,10 +7,15 @@ so there is no bulk usage table to seed.
 
 from __future__ import annotations
 
+import base64
+import json
+import os
 import sqlite3
+import urllib.error
+import urllib.request
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Iterator
+from typing import Any, Iterator
 
 from app.config import settings
 
@@ -106,86 +111,157 @@ class DictRow:
         return repr(self._d)
 
 
-class TursoCursorWrapper:
-    def __init__(self, cursor):
-        self._cursor = cursor
+class TursoHttpCursor:
+    """DB-API compatible cursor backed by a Turso /v2/pipeline result."""
 
-    @property
-    def lastrowid(self):
-        return getattr(self._cursor, "lastrowid", None)
+    def __init__(self, cols: list[str], rows: list[tuple], lastrowid: int | None):
+        self._cols = cols
+        self._rows = rows
+        self._idx = 0
+        self.lastrowid = lastrowid
+        self.description = [(c,) for c in cols] if cols else None
 
-    @property
-    def description(self):
-        return getattr(self._cursor, "description", None)
-
-    def _wrap(self, row):
-        if row is None:
+    def fetchone(self) -> DictRow | None:
+        if self._idx >= len(self._rows):
             return None
-        if self._cursor.description:
-            cols = [col[0] for col in self._cursor.description]
-            return DictRow(cols, row)
-        return row
+        row = self._rows[self._idx]
+        self._idx += 1
+        return DictRow(self._cols, row) if self._cols else row  # type: ignore[return-value]
 
-    def fetchone(self):
-        return self._wrap(self._cursor.fetchone())
-
-    def fetchall(self):
-        desc = self._cursor.description
-        if not desc:
-            return self._cursor.fetchall()
-        cols = [col[0] for col in desc]
-        return [DictRow(cols, r) for r in self._cursor.fetchall()]
+    def fetchall(self) -> list[DictRow]:
+        rem = self._rows[self._idx:]
+        self._idx = len(self._rows)
+        if not self._cols:
+            return list(rem)  # type: ignore[return-value]
+        return [DictRow(self._cols, r) for r in rem]
 
     def __iter__(self):
         return iter(self.fetchall())
 
 
-class TursoConnWrapper:
-    def __init__(self, conn):
-        self._conn = conn
+def _encode_turso_arg(val: Any) -> dict[str, Any]:
+    if val is None:
+        return {"type": "null"}
+    if isinstance(val, bool):
+        return {"type": "integer", "value": "1" if val else "0"}
+    if isinstance(val, int):
+        return {"type": "integer", "value": str(val)}
+    if isinstance(val, float):
+        return {"type": "float", "value": val}
+    if isinstance(val, (bytes, bytearray)):
+        return {"type": "blob", "base64": base64.b64encode(bytes(val)).decode("ascii")}
+    return {"type": "text", "value": str(val)}
 
-    def execute(self, sql: str, params: tuple | list = ()):
-        cur = self._conn.cursor()
+
+def _decode_turso_cell(cell: dict[str, Any]) -> Any:
+    t = cell.get("type")
+    if t == "null" or t is None:
+        return None
+    if t == "integer":
+        return int(cell["value"])
+    if t == "float":
+        return float(cell["value"])
+    if t == "blob":
+        return base64.b64decode(cell.get("base64", ""))
+    return cell.get("value")
+
+
+class TursoHttpConnection:
+    """Zero-dependency Turso Hrana-over-HTTP (/v2/pipeline) connection.
+
+    Works on Windows, Linux, Replit, and Hugging Face Spaces over standard
+    HTTPS (port 443) without requiring native Rust/C libsql wheels.
+    """
+
+    def __init__(self, db_url: str, auth_token: str):
+        url = db_url.strip().strip('"').strip("'").rstrip("/")
+        if url.startswith("libsql://"):
+            url = "https://" + url[len("libsql://"):]
+        elif not url.startswith(("https://", "http://")):
+            url = "https://" + url
+        self._endpoint = f"{url}/v2/pipeline"
+        self._token = auth_token.strip().strip('"').strip("'")
+
+    def _send(self, requests_payload: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        body = json.dumps({"requests": requests_payload}).encode("utf-8")
+        req = urllib.request.Request(
+            self._endpoint,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {self._token}",
+                "Content-Type": "application/json",
+                "User-Agent": "voltic-turso-http/1.0",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Turso HTTP {e.code}: {err_body}") from e
+
+        results = data.get("results", [])
+        for r in results:
+            if r.get("type") == "error":
+                msg = r.get("error", {}).get("message", "Unknown Turso error")
+                raise RuntimeError(f"Turso SQL error: {msg}")
+        return results
+
+    def execute(self, sql: str, params: tuple | list = ()) -> TursoHttpCursor:
+        stmt: dict[str, Any] = {"sql": sql}
         if params:
-            cur.execute(sql, tuple(params))
-        else:
-            cur.execute(sql)
-        return TursoCursorWrapper(cur)
+            stmt["args"] = [_encode_turso_arg(p) for p in params]
+        results = self._send([
+            {"type": "execute", "stmt": stmt},
+            {"type": "close"},
+        ])
+        res = results[0]["response"]["result"]
+        cols = [c["name"] for c in res.get("cols", [])]
+        rows = [
+            tuple(_decode_turso_cell(cell) for cell in row)
+            for row in res.get("rows", [])
+        ]
+        raw_last = res.get("last_insert_rowid")
+        lastrowid = int(raw_last) if raw_last is not None else None
+        return TursoHttpCursor(cols, rows, lastrowid)
 
-    def executescript(self, script: str):
-        # Strip comments and split by semicolon
-        lines = []
-        for line in script.splitlines():
-            stripped = line.strip()
-            if not stripped.startswith("--"):
-                lines.append(line)
-        cleaned = "\n".join(lines)
-        for stmt in cleaned.split(";"):
-            s = stmt.strip()
-            if s:
-                self.execute(s)
+    def executescript(self, script: str) -> None:
+        lines = [
+            line for line in script.splitlines()
+            if not line.strip().startswith("--")
+        ]
+        stmts = [s.strip() for s in "\n".join(lines).split(";") if s.strip()]
+        if not stmts:
+            return
+        payload: list[dict[str, Any]] = [
+            {"type": "execute", "stmt": {"sql": s}} for s in stmts
+        ]
+        payload.append({"type": "close"})
+        self._send(payload)
 
-    def commit(self):
-        self._conn.commit()
+    def commit(self) -> None:
+        # Each /v2/pipeline request auto-commits unless inside an explicit BEGIN
+        pass
 
-    def close(self):
-        if hasattr(self._conn, "close"):
-            self._conn.close()
+    def close(self) -> None:
+        pass
+
+
+def is_turso_configured() -> bool:
+    url = (os.getenv("TURSO_DATABASE_URL") or settings.TURSO_DATABASE_URL).strip()
+    token = (os.getenv("TURSO_AUTH_TOKEN") or settings.TURSO_AUTH_TOKEN).strip()
+    return bool(url and token)
 
 
 @contextmanager
 def get_conn():
-    conn = None
-    if settings.TURSO_DATABASE_URL and settings.TURSO_AUTH_TOKEN:
-        try:
-            import libsql  # type: ignore
-            raw_conn = libsql.connect(
-                database=settings.TURSO_DATABASE_URL,
-                auth_token=settings.TURSO_AUTH_TOKEN,
-            )
-            conn = TursoConnWrapper(raw_conn)
-        except Exception as e:
-            print(f"[db] Turso connection error, falling back to local SQLite: {e}")
+    db_url = (os.getenv("TURSO_DATABASE_URL") or settings.TURSO_DATABASE_URL).strip()
+    auth_token = (os.getenv("TURSO_AUTH_TOKEN") or settings.TURSO_AUTH_TOKEN).strip()
+
+    conn: Any = None
+    if db_url and auth_token:
+        conn = TursoHttpConnection(db_url, auth_token)
 
     if conn is None:
         # Fallback: standard local SQLite
@@ -202,7 +278,12 @@ def get_conn():
 
 
 def init_db() -> None:
-    settings.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if is_turso_configured():
+        url = (os.getenv("TURSO_DATABASE_URL") or settings.TURSO_DATABASE_URL).strip()
+        print(f"[db] Using Turso cloud database: {url}")
+    else:
+        print(f"[db] Using local SQLite database ({settings.DB_PATH}) -- set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN for Turso")
+        settings.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with get_conn() as conn:
         conn.executescript(SCHEMA)
         _migrate(conn)
