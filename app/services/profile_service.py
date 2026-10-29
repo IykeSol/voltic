@@ -67,26 +67,28 @@ def settle_balance(meter_id: str) -> float | None:
 
     now = datetime.utcnow()
     ts = prof.get("balance_ts")
-    elapsed_days = 0.0
+    elapsed_seconds = 0.0
     if ts:
         try:
-            elapsed_days = max(0.0, (now - datetime.fromisoformat(ts)).total_seconds() / 86400)
+            elapsed_seconds = max(0.0, (now - datetime.fromisoformat(ts)).total_seconds())
         except ValueError:
-            elapsed_days = 0.0
+            elapsed_seconds = 0.0
+    elapsed_days = elapsed_seconds / 86400.0
 
     tariff = settings.TARIFF_BY_INCOME.get(str(prof["income_level"]), settings.DEFAULT_TARIFF)
     daily_cost = float(prof.get("daily_kwh") or 0) * tariff
     spent = elapsed_days * daily_cost
-    new_balance = max(0.0, round(float(prof["balance"]) - spent, 2))
+    new_balance = max(0.0, round(float(prof["balance"]) - spent, 4))
 
-    # Persist if anything changed (or to stamp a missing timestamp).
-    if spent > 0 or not ts:
+    # Persist when at least 5 seconds have elapsed (avoids 8x redundant writes during
+    # parallel dashboard fetches while preserving sub-kobo precision).
+    if (spent > 0 and elapsed_seconds >= 5.0) or not ts:
         with get_conn() as conn:
             conn.execute(
                 "UPDATE meter_profiles SET balance=?, balance_ts=? WHERE meter_id=?",
                 (new_balance, now.isoformat(), meter_id),
             )
-    return new_balance
+    return round(new_balance, 2)
 
 
 def add_recharge(meter_id: str, amount: float) -> float | None:

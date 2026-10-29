@@ -116,6 +116,33 @@ def build_user_df(meter_id: str, days: int = 30) -> pd.DataFrame:
                 "recharge_amount": 0.0, "remaining_balance": 0.0, "anomaly": 0,
             })
 
+    # Inject a few realistic prepaid-meter events over the recent window (overnight
+    # appliance left running, compressor surge, or peak load spike) so anomaly
+    # detection works naturally on any active meter profile.
+    event_specs = [
+        # (days_ago, hour, kind)
+        (2, 2, "night"),
+        (5, 19, "spike"),
+        (9, 3, "night"),
+        (13, 14, "fault"),
+    ]
+    total_rows = len(rows)
+    for d_ago, target_h, kind in event_specs:
+        idx = (days - 1 - d_ago) * 24 + target_h
+        if 0 <= idx < total_rows:
+            r = rows[idx]
+            if kind == "night":
+                r["ac_usage_hours"] = round(min(1.0, r["ac_usage_hours"] + 0.35), 3)
+                r["units_consumed_kwh"] = round(r["units_consumed_kwh"] + rng.uniform(3.2, 4.2), 4)
+            elif kind == "spike":
+                r["ac_usage_hours"] = 1.0
+                r["washing_machine_usage"] = 0.95
+                r["units_consumed_kwh"] = round(r["units_consumed_kwh"] + rng.uniform(2.8, 3.8), 4)
+            elif kind == "fault":
+                r["fridge_usage"] = 1.0
+                r["units_consumed_kwh"] = round(r["units_consumed_kwh"] + rng.uniform(2.5, 3.4), 4)
+            r["anomaly"] = 1
+
     df = pd.DataFrame(rows)
 
     # Draw the balance down so the latest reading equals the stored balance.

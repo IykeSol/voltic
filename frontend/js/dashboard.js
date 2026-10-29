@@ -1,9 +1,12 @@
 /* Dashboard orchestration: onboarding, fetch, render widgets, wire actions. */
 
 const state = { profile: null, summary: null, history: null, forecast: null,
-                peak: null, heatmap: null, appliances: null, budget: null, anomalies: null };
+                peak: null, heatmap: null, appliances: null, budget: null, anomalies: null,
+                liveBalance: null, liveSyncedAt: null };
 
 const TARIFF = { low: 60, middle: 68, high: 75 };
+let _meterTickTimer = null;
+let _meterSyncTimer = null;
 
 /* ---------- bootstrap ---------- */
 async function initDashboard() {
@@ -50,6 +53,8 @@ async function loadAll() {
         API.get("/usage/anomalies"),
       ]);
     Object.assign(state, { summary, history, forecast, peak, heatmap, appliances, budget, anomalies });
+    state.liveBalance = Number(summary.remaining_balance || 0);
+    state.liveSyncedAt = Date.now();
 
     renderSummary();
     renderSmartAlerts();
@@ -59,6 +64,7 @@ async function loadAll() {
     renderAnomalies();
     renderRecharges();
     renderBudget();
+    startLiveMeterTicker();
     loadAI();
   } catch (e) {
     toast(e.message || "Failed to load dashboard", true);
@@ -76,8 +82,9 @@ function renderSummary() {
   setHtml("kpiMonthly", `${fmt(s.total_month_kwh, 0)}<small>kWh</small>`);
   setText("kpiMonthlyFoot", `Estimated 30 days`);
 
-  setHtml("kpiBalance", naira(s.remaining_balance));
-  setText("kpiBalanceFoot", `≈ ${naira(s.avg_daily_cost)}/day spend`);
+  setHtml("kpiBalance", nairaLive(s.remaining_balance));
+  const unitsLeft = (Number(s.remaining_balance || 0) / currentTariff());
+  setText("kpiBalanceFoot", `${fmt(unitsLeft, 3)} kWh left · ≈ ${naira(s.avg_daily_cost)}/day`);
 
   setText("kpiExhaust", s.predicted_exhaustion_date);
   setText("kpiExhaustFoot", `~${f.days_until_exhaustion} days of cover left`);
@@ -85,6 +92,45 @@ function renderSummary() {
   const spikePct = Math.round((f.spike_probability || 0) * 100);
   setHtml("kpiSpike", `${spikePct}<small>%</small>`);
   setText("kpiSpikeFoot", `Peak hour ${s.peak_hour_label}`);
+}
+
+function nairaLive(n) {
+  return "₦" + Number(n || 0).toLocaleString("en-NG", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function startLiveMeterTicker() {
+  if (_meterTickTimer) clearInterval(_meterTickTimer);
+  if (_meterSyncTimer) clearInterval(_meterSyncTimer);
+
+  _meterTickTimer = setInterval(() => {
+    const s = state.summary;
+    if (!s || !s.has_data || state.liveBalance === null || !state.liveSyncedAt) return;
+    const elapsedSec = (Date.now() - state.liveSyncedAt) / 1000;
+    const costPerSec = Number(s.avg_daily_cost || 0) / 86400;
+    const currentBal = Math.max(0, state.liveBalance - elapsedSec * costPerSec);
+    const unitsLeft = currentBal / currentTariff();
+
+    setHtml("kpiBalance", nairaLive(currentBal));
+    setText("kpiBalanceFoot", `${fmt(unitsLeft, 4)} kWh left · ≈ ${naira(s.avg_daily_cost)}/day`);
+    setText("budgetBalance", nairaLive(currentBal));
+    if (state.profile) state.profile.balance = Number(currentBal.toFixed(2));
+  }, 1000);
+
+  // Sync balance settlement with server every 30s in the background
+  _meterSyncTimer = setInterval(async () => {
+    if (!state.profile) return;
+    try {
+      const prof = await API.get("/profile");
+      if (prof && prof.has_profile) {
+        state.liveBalance = Number(prof.balance || 0);
+        state.liveSyncedAt = Date.now();
+        state.profile = prof;
+      }
+    } catch { /* ignore background sync error */ }
+  }, 30000);
 }
 
 /* ---------- Smart alerts ---------- */

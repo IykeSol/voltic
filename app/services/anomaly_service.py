@@ -28,12 +28,12 @@ def _classify(row: pd.Series, z: float) -> tuple[str, str, str]:
         return ("high", "Night usage",
                 "Unusually high consumption overnight - check for meter tampering "
                 "or an appliance left running.")
-    if z > 3.0:
-        return ("high", "Consumption spike",
-                "A sharp spike well above your normal level for this hour.")
     if row.get("fridge_usage", 0) > 0.9 and z > 1.5:
         return ("medium", "Appliance fault",
                 "Sustained heavy draw consistent with a faulty fridge or AC compressor.")
+    if z > 3.0:
+        return ("high", "Consumption spike",
+                "A sharp spike well above your normal level for this hour.")
     return ("medium", "Abnormal pattern",
             "Consumption deviates from your usual pattern for this time of day.")
 
